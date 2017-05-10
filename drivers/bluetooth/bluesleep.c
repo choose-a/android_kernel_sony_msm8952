@@ -183,13 +183,28 @@ static void hsuart_power(int on)
 	if (test_bit(BT_SUSPEND, &flags))
 		return;
 	if (on && atomic_read(&uart_is_on) == 0) {
-		msm_hs_request_clock_on(bsi->uport);
-		msm_hs_set_mctrl(bsi->uport, TIOCM_RTS);
-		atomic_inc(&uart_is_on);
+		ret = msm_hs_request_clock_on(bsi->uport);
+		if (unlikely(ret))
+			pr_err("Turning UART clock on failed (%d)\n", ret);
+		else {
+			msm_hs_set_mctrl(bsi->uport, TIOCM_RTS);
+			atomic_inc(&uart_is_on);
+		}
 	} else if (!on && atomic_read(&uart_is_on) == 1) {
 		msm_hs_set_mctrl(bsi->uport, 0);
-		msm_hs_request_clock_off(bsi->uport);
-		atomic_set(&uart_is_on, 0);
+		ret = msm_hs_request_clock_off(bsi->uport);
+		if (unlikely(ret)) {
+			if(ret == -EPERM) {
+				// Decrease the uart clk indicator in the error case: clock was turned
+				// off already.
+				atomic_set(&uart_is_on, 0);
+			}
+			pr_err("Turning UART clock off failed (%d)\n", ret);
+		} else {
+			atomic_set(&uart_is_on, 0);
+		}
+	} else {
+		pr_err("Inconsistent UART clock request state.\n");
 	}
 }
 
@@ -199,10 +214,10 @@ static void enable_wakeup_irq(int enable)
 	disabled = atomic_read(&bsi->wakeup_irq_disabled);
 
 	if (enable && disabled == 1) {
-		enable_irq_wake(bsi->host_wake_irq);
+		enable_irq(bsi->host_wake_irq);
 		atomic_dec(&bsi->wakeup_irq_disabled);
 	} else if (!enable && !disabled) {
-		disable_irq_wake(bsi->host_wake_irq);
+		disable_irq(bsi->host_wake_irq);
 		atomic_inc(&bsi->wakeup_irq_disabled);
 	}
 }
